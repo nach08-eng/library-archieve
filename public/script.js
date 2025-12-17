@@ -200,10 +200,14 @@ async function handleUpload(event) {
     message.textContent = '';
 
     const formData = new FormData(form);
+    const token = localStorage.getItem('adminToken'); // Get token
 
     try {
         const response = await fetch('/api/books', {
             method: 'POST',
+            headers: {
+                'x-admin-token': token || '' // Add custom header
+            },
             body: formData
         });
 
@@ -214,6 +218,8 @@ async function handleUpload(event) {
             setTimeout(() => {
                 window.location.href = 'index.html';
             }, 1500);
+        } else if (response.status === 401 || response.status === 403) {
+            throw new Error('Unauthorized. Please login again.');
         } else {
             const err = await response.json();
             throw new Error(err.message || 'Upload failed');
@@ -223,5 +229,79 @@ async function handleUpload(event) {
         message.textContent = 'Error: ' + error.message;
         submitBtn.disabled = false;
         submitBtn.textContent = 'Upload to Archive';
+
+        if (error.message.includes('Unauthorized')) {
+            setTimeout(() => {
+                window.location.href = 'login.html';
+            }, 1500);
+        }
     }
 }
+
+// --- Admin Authentication ---
+async function handleLogin(event) {
+    event.preventDefault();
+    const password = document.getElementById('adminPassword').value;
+    const message = document.getElementById('loginMessage');
+
+    try {
+        const response = await fetch('/api/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+            localStorage.setItem('adminToken', data.token);
+            window.location.href = 'admin.html';
+        } else {
+            message.textContent = data.message || 'Login failed';
+        }
+    } catch (error) {
+        console.error('Login error:', error);
+        message.textContent = 'Server error during login.';
+    }
+}
+
+// Check auth on admin page
+if (window.location.pathname.endsWith('admin.html')) {
+    const token = localStorage.getItem('adminToken');
+    if (!token) {
+        window.location.href = 'login.html';
+    }
+}
+
+// Logout function
+function logout() {
+    localStorage.removeItem('adminToken');
+    window.location.href = 'index.html';
+}
+
+// --- Security: Disable Right-Click & Shortcuts ---
+document.addEventListener('contextmenu', function (e) {
+    e.preventDefault();
+    alert("Sorry, right click is disabled!");
+});
+
+document.onkeydown = function (e) {
+    if (e.keyCode == 123) { // Disable F12
+        return false;
+    }
+    if (e.ctrlKey && e.shiftKey && e.keyCode == 'I'.charCodeAt(0)) { // Disable Ctrl+Shift+I
+        return false;
+    }
+    if (e.ctrlKey && e.shiftKey && e.keyCode == 'C'.charCodeAt(0)) { // Disable Ctrl+Shift+C
+        return false;
+    }
+    if (e.ctrlKey && e.shiftKey && e.keyCode == 'J'.charCodeAt(0)) { // Disable Ctrl+Shift+J
+        return false;
+    }
+    if (e.ctrlKey && e.keyCode == 'U'.charCodeAt(0)) { // Disable Ctrl+U
+        return false;
+    }
+    if (e.ctrlKey && e.keyCode == 'S'.charCodeAt(0)) { // Disable Ctrl+S
+        return false;
+    }
+};

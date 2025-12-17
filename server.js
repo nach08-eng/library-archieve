@@ -98,7 +98,33 @@ const saveLocalBooks = (books) => fs.writeFileSync(DATA_FILE, JSON.stringify(boo
 const upload = IS_CLOUD ? uploadCloud : uploadLocal;
 
 // Upload Book
-app.post('/api/books', upload.fields([{ name: 'bookFile', maxCount: 1 }, { name: 'coverImage', maxCount: 1 }]), async (req, res) => {
+
+
+// Admin Login Route
+app.post('/api/login', (req, res) => {
+    const { password } = req.body;
+    // Simple hardcoded password for demonstration. In production, use env vars.
+    const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+
+    if (password === ADMIN_PASSWORD) {
+        // Return a simple token
+        return res.json({ success: true, token: 'admin-secret-access' });
+    }
+    return res.status(401).json({ success: false, message: 'Invalid password' });
+});
+
+// Auth Middleware
+const requireAdmin = (req, res, next) => {
+    const token = req.headers['x-admin-token'];
+    if (token === 'admin-secret-access') {
+        next();
+    } else {
+        res.status(403).json({ message: 'Unauthorized. Admin access required.' });
+    }
+};
+
+// Upload Book (Protected)
+app.post('/api/books', requireAdmin, upload.fields([{ name: 'bookFile', maxCount: 1 }, { name: 'coverImage', maxCount: 1 }]), async (req, res) => {
     try {
         const { title, author, description, language, year, subjects } = req.body;
 
