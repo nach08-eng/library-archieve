@@ -104,7 +104,7 @@ const upload = IS_CLOUD ? uploadCloud : uploadLocal;
 app.post('/api/login', (req, res) => {
     const { password } = req.body;
     // Simple hardcoded password for demonstration. In production, use env vars.
-    const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+    const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'Soma*Valli83';
 
     if (password === ADMIN_PASSWORD) {
         // Return a simple token
