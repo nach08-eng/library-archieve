@@ -4,8 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
-const { S3Client } = require('@aws-sdk/client-s3');
-const multerS3 = require('multer-s3');
+const { createClient } = require('@supabase/supabase-js');
 const Book = require('./models/Book');
 require('dotenv').config();
 
@@ -13,8 +12,8 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Determine Mode
-const IS_CLOUD = !!(process.env.MONGODB_URI && process.env.AWS_BUCKET_NAME);
-console.log(`Starting server in ${IS_CLOUD ? 'CLOUD (MongoDB + S3)' : 'LOCAL (JSON + File System)'} mode.`);
+const IS_CLOUD = !!(process.env.MONGODB_URI && process.env.SUPABASE_URL && process.env.SUPABASE_KEY);
+console.log(`Starting server in ${IS_CLOUD ? 'CLOUD (MongoDB + Supabase)' : 'LOCAL (JSON + File System)'} mode.`);
 
 // Middleware
 app.use(cors());
@@ -23,38 +22,21 @@ app.use(express.static('public'));
 app.use('/uploads', express.static('uploads'));
 
 // ============================================================================
-// CLOUD CONFIGURATION (MongoDB + S3)
+// CLOUD CONFIGURATION (MongoDB + Supabase)
 // ============================================================================
-let uploadCloud;
+let supabase;
 if (IS_CLOUD) {
     // MongoDB Connection
     mongoose.connect(process.env.MONGODB_URI)
         .then(() => console.log('MongoDB connected'))
         .catch(err => console.error('MongoDB connection error:', err));
 
-    // S3 Configuration
-    const s3 = new S3Client({
-        region: process.env.AWS_REGION,
-        credentials: {
-            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
-        }
-    });
-
-    // Multer S3
-    uploadCloud = multer({
-        storage: multerS3({
-            s3: s3,
-            bucket: process.env.AWS_BUCKET_NAME,
-            acl: 'public-read',
-            contentType: multerS3.AUTO_CONTENT_TYPE,
-            metadata: (req, file, cb) => cb(null, { fieldName: file.fieldname }),
-            key: (req, file, cb) => {
-                const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-                cb(null, `uploads/${uniqueSuffix}${path.extname(file.originalname)}`);
-            }
-        })
-    });
+    // Supabase Configuration
+    supabase = createClient(
+        process.env.SUPABASE_URL,
+        process.env.SUPABASE_KEY
+    );
+    console.log('Supabase Storage connected');
 }
 
 // ============================================================================
@@ -70,17 +52,13 @@ if (!IS_CLOUD) {
     if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
     if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, '[]', 'utf8');
-
-    // Multer Local
-    const storageLocal = multer.diskStorage({
-        destination: (req, file, cb) => cb(null, 'uploads/'),
-        filename: (req, file, cb) => {
-            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-            cb(null, uniqueSuffix + path.extname(file.originalname));
-        }
-    });
-    uploadLocal = multer({ storage: storageLocal });
 }
+
+// Multer configuration (works for both modes)
+uploadLocal = multer({
+    storage: multer.memoryStorage(), // Store in memory for flexibility
+    limits: { fileSize: 50 * 1024 * 1024 } // 50MB limit
+});
 
 // Helper for Local Data
 const getLocalBooks = () => {
@@ -94,11 +72,8 @@ const saveLocalBooks = (books) => fs.writeFileSync(DATA_FILE, JSON.stringify(boo
 // API ROUTES
 // ============================================================================
 
-// Select appropriate uploader
-const upload = IS_CLOUD ? uploadCloud : uploadLocal;
-
-// Upload Book
-
+// Select appropriate uploader (only for local mode)
+const upload = uploadLocal;
 
 // Admin Login Route
 app.post('/api/login', (req, res) => {
@@ -140,13 +115,51 @@ app.post('/api/books', requireAdmin, upload.fields([{ name: 'bookFile', maxCount
         }
 
         if (IS_CLOUD) {
-            // --- CLOUD MODE REQ ---
+            // --- CLOUD MODE (Supabase) ---
+            const timestamp = Date.now();
+            const bookFileName = `${timestamp}-${bookFile.originalname}`;
+            const coverFileName = coverImage ? `${timestamp}-${coverImage.originalname}` : null;
+
+            // Upload book file to Supabase Storage
+            const { data: bookData, error: bookError } = await supabase.storage
+                .from('library-books')
+                .upload(`books/${bookFileName}`, bookFile.buffer, {
+                    contentType: bookFile.mimetype,
+                    upsert: false
+                });
+
+            if (bookError) throw new Error('Failed to upload book file: ' + bookError.message);
+
+            // Get public URL for book
+            const { data: { publicUrl: bookUrl } } = supabase.storage
+                .from('library-books')
+                .getPublicUrl(`books/${bookFileName}`);
+
+            // Upload cover image if provided
+            let coverUrl = null;
+            if (coverImage) {
+                const { data: coverData, error: coverError } = await supabase.storage
+                    .from('library-books')
+                    .upload(`covers/${coverFileName}`, coverImage.buffer, {
+                        contentType: coverImage.mimetype,
+                        upsert: false
+                    });
+
+                if (coverError) throw new Error('Failed to upload cover: ' + coverError.message);
+
+                const { data: { publicUrl } } = supabase.storage
+                    .from('library-books')
+                    .getPublicUrl(`covers/${coverFileName}`);
+                coverUrl = publicUrl;
+            }
+
+            // Save to MongoDB
             const newBook = new Book({
                 title, author, description, language,
                 year: year ? parseInt(year) : null,
                 subjects: parsedSubjects,
-                fileUrl: bookFile.location, // S3 URL
-                coverImage: coverImage ? coverImage.location : null,
+                fileUrl: bookUrl,
+                coverImage: coverUrl,
                 uploadedAt: new Date()
             });
             const savedBook = await newBook.save();
@@ -154,13 +167,28 @@ app.post('/api/books', requireAdmin, upload.fields([{ name: 'bookFile', maxCount
 
         } else {
             // --- LOCAL MODE REQ ---
+            const timestamp = Date.now();
+            const bookFileName = `${timestamp}-${bookFile.originalname}`;
+            const coverFileName = coverImage ? `${timestamp}-${coverImage.originalname}` : null;
+
+            // Save book file to disk
+            const bookPath = path.join(__dirname, 'uploads', bookFileName);
+            fs.writeFileSync(bookPath, bookFile.buffer);
+
+            // Save cover image if provided
+            let coverPath = null;
+            if (coverImage) {
+                coverPath = path.join(__dirname, 'uploads', coverFileName);
+                fs.writeFileSync(coverPath, coverImage.buffer);
+            }
+
             const newBook = {
                 _id: Date.now().toString(),
                 title, author, description, language,
                 year: year ? parseInt(year) : null,
                 subjects: parsedSubjects,
-                fileUrl: `/uploads/${bookFile.filename}`,
-                coverImage: coverImage ? `/uploads/${coverImage.filename}` : null,
+                fileUrl: `/uploads/${bookFileName}`,
+                coverImage: coverImage ? `/uploads/${coverFileName}` : null,
                 uploadedAt: new Date().toISOString()
             };
             const books = getLocalBooks();

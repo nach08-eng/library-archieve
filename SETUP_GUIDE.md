@@ -70,7 +70,7 @@ This guide will walk you through setting up MongoDB Atlas (for the database) and
 
 | Key | Value |
 | :--- | :--- |
-| `MONGODB_URI` | (From Part 1) |
+| `MONGODB_URI` | (From Part 1 - your full connection string) |
 | `AWS_BUCKET_NAME` | (From Part 2 - bucket name) |
 | `AWS_REGION` | (From Part 2 - e.g., `us-east-1`) |
 | `AWS_ACCESS_KEY_ID` | (From Part 2 - IAM User) |
